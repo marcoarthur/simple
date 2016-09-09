@@ -1,0 +1,153 @@
+#!/usr/bin/env perl
+use Mojolicious::Lite;
+
+use DBI;
+use Data::Dumper;
+
+plugin 'TagHelpers';
+
+my $dbfile="/home/itaipu/tools/databases/sqlite3-dbix/examples/zotero_db/zotero.sqlite";
+
+our $dbh = DBI->connect("dbi:SQLite:$dbfile", '', '') ||
+           die "Couldn't connect to db, aborting !";
+
+helper 'db' => sub { $dbh };
+
+# execute statement and save to stash the array
+# with results rows
+helper exec_stm => sub {
+    my $self = shift;
+    my $stmt = shift;
+    my @bind_args = @_;
+
+    my $sth = $self->db->prepare($stmt);
+    @bind_args ? $sth->execute(@_) : $sth->execute;
+
+    my @results;
+
+    while( my @res = $sth->fetchrow_array ) {
+        push @results, \@res;
+    }
+
+    $self->stash( db_results => \@results );
+    
+    return wantarray ? @results : \@results;
+};
+
+# creates a js array and send to render as content text
+helper render_js => sub {
+    my $self = shift;
+    my $results = $self->stash('db_results'); 
+    return unless $results;
+
+    my $js = "[" . join(",", map { @$_ } @$results ) . "]";
+    $self->render( text => $js );
+};
+
+get '/items' => sub {
+    my $c = shift;
+
+    my $stmt = qq{
+        SELECT JSON_OBJECT(
+            'itemID', itemID,
+            'itemTypeID', itemTypeID,
+            'dateAdded', dateAdded,
+            'dateModified', dateModified,
+            'libraryID', libraryID,
+            'key', key
+            ) FROM items
+    };
+
+    $c->exec_stm($stmt);
+    $c->render_js();
+};
+
+get '/sample_data' => sub {
+    my $self = shift;
+
+    my $statement = qq{
+        WITH RECURSIVE big_json_tbl(id, sample) AS (
+            SELECT 0, NULL
+            UNION ALL
+            SELECT id + 1, random() % 100 FROM big_json_tbl LIMIT 1000
+        ) SELECT JSON_OBJECT('id', id, 'sample', sample) AS json
+        FROM big_json_tbl
+        WHERE sample IS NOT NULL
+        LIMIT 100
+    };
+
+    $self->exec_stm($statement);
+    $self->render_js;
+};
+
+get '/' => sub {
+    my $c = shift;
+    $c->render(template => 'index');
+};
+
+app->start;
+
+__DATA__
+
+@@ index.html.ep
+% layout 'default';
+% title 'Simple REST';
+
+<h1>Playing with some JSON DATA and JQUERY AJAX</h1>
+
+<p> Below some in a div element filled with an ajax call </p>
+
+<h2> The Div element random_table </h2>
+
+<%= submit_button 'Show me', id => 'show_btn'; %>
+<%= submit_button 'Hide me', id => 'hide_btn'; %>
+
+<div id="random_table">
+</div>
+
+<script type="text/javascript">
+var hidden = false;
+var do_req = true;
+
+$(document).ready( function() {
+    function populate(div_id) {
+        $.getJSON('/sample_data', function(data) {
+            var html = "<ul>";
+            $.each(data, function(entryIndex, entry) {
+                html += '<li>' + entry.id + ':' + entry.sample + '</li>';
+            });
+            html += "</ul>";
+            $(div_id).append(html);
+        });
+    }
+
+    $("#show_btn").click(function(event) {
+        if ( do_req ) {
+            populate("#random_table");
+            do_req = false;
+            hidden = false;
+        }
+
+        if (hidden) {
+            $("#random_table").fadeIn();
+            hidden = false;
+        }
+    });
+
+
+    $("#hide_btn").click( function(event) {
+        if( !hidden ) {
+            $("#random_table").fadeOut();
+            hidden = true;
+        }
+    });
+});
+</script>
+
+@@ layouts/default.html.ep
+<!DOCTYPE html>
+<html>
+  <head><title><%= title %></title></head>
+  <script src="/mojo/jquery/jquery.js"></script>
+  <body><%= content %></body>
+</html>
